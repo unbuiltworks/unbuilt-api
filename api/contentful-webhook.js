@@ -5,12 +5,21 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// ✅ ADD THIS - tells Vercel to parse the request body
+// Disable automatic body parsing - we'll do it manually
 export const config = {
   api: {
-    bodyParser: true,
+    bodyParser: false,
   },
 };
+
+// Helper function to read the raw body
+async function getRawBody(req) {
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 async function sendNotification(token, project) {
   const message = {
@@ -40,18 +49,19 @@ export default async function handler(req, res) {
   }
 
   try {
-    // ✅ ADD THIS - log to help debug
-    console.log('Webhook received:', {
-      topic: req.headers['x-contentful-topic'],
-      body: req.body
-    });
+    // Manually parse the body
+    const rawBody = await getRawBody(req);
+    const body = JSON.parse(rawBody);
+    
+    console.log('Webhook received successfully!');
+    console.log('Parsed body:', body);
 
-    const { sys, fields } = req.body;
+    const { sys, fields } = body;
     const topic = req.headers['x-contentful-topic'];
     
     // Only process published projects
     if (topic !== 'ContentManagement.Entry.publish' || sys?.contentType?.sys?.id !== 'project') {
-      return res.status(200).json({ message: 'Ignored' });
+      return res.status(200).json({ message: 'Ignored', topic, contentType: sys?.contentType?.sys?.id });
     }
 
     const project = {
@@ -60,10 +70,17 @@ export default async function handler(req, res) {
       architect: fields.architect?.['en-US'] || 'Unknown',
     };
 
+    console.log('Processing project:', project);
+
     // Get all users with notifications enabled
-    const { data: users } = await supabase
+    const { data: users, error: dbError } = await supabase
       .from('user_push_tokens')
       .select('push_token');
+
+    if (dbError) {
+      console.error('Database error:', dbError);
+      return res.status(500).json({ error: 'Database error', details: dbError.message });
+    }
 
     let sent = 0;
     for (const user of users || []) {
@@ -71,7 +88,8 @@ export default async function handler(req, res) {
       sent++;
     }
 
-    return res.status(200).json({ success: true, sent });
+    console.log(`Sent ${sent} notifications`);
+    return res.status(200).json({ success: true, sent, project: project.title });
   } catch (error) {
     console.error('Webhook error:', error);
     return res.status(500).json({ error: error.message });
