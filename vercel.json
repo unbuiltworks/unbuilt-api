@@ -1,9 +1,14 @@
 {
-  "version": 2,
-  "builds": [
+  "functions": {
+    "api/**/*.js": {
+      "memory": 1024,
+      "maxDuration": 10
+    }
+  },
+  "crons": [
     {
-      "src": "api/**/*.js",
-      "use": "@vercel/node"
+      "path": "/api/send-scheduled-notifications",
+      "schedule": "0 * * * *"
     }
   ]
 }
