@@ -5,6 +5,13 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
+// ✅ ADD THIS - tells Vercel to parse the request body
+export const config = {
+  api: {
+    bodyParser: true,
+  },
+};
+
 async function sendNotification(token, project) {
   const message = {
     to: token,
@@ -33,6 +40,12 @@ export default async function handler(req, res) {
   }
 
   try {
+    // ✅ ADD THIS - log to help debug
+    console.log('Webhook received:', {
+      topic: req.headers['x-contentful-topic'],
+      body: req.body
+    });
+
     const { sys, fields } = req.body;
     const topic = req.headers['x-contentful-topic'];
     
@@ -60,6 +73,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ success: true, sent });
   } catch (error) {
+    console.error('Webhook error:', error);
     return res.status(500).json({ error: error.message });
   }
 }
