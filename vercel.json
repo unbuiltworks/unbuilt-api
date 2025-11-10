@@ -1,6 +1,4 @@
 {
-  "buildCommand": "mkdir -p dist && cp *.html *.txt dist/",
-  "outputDirectory": "dist",
   "functions": {
     "api/**/*.js": {
       "memory": 1024,
