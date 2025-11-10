@@ -7,7 +7,7 @@ process.env.SUPABASE_URL,
 process.env.SUPABASE_SERVICE_KEY
 );
 
-const contentful = createContentfulClient({
+const contentfulClient = createContentfulClient({
 space: process.env.CONTENTFUL_SPACE_ID,
 accessToken: process.env.CONTENTFUL_ACCESS_TOKEN,
 });
@@ -56,7 +56,7 @@ return null;
 async function getRecentProjects(sinceDate) {
 try {
 // Get projects published in the last 24 hours
-const response = await contentful.getEntries({
+const response = await contentfulClient.getEntries({
 content_type: ‘project’,
 ‘sys.createdAt[gte]’: sinceDate,
 order: ‘-sys.createdAt’,
