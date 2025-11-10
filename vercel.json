@@ -1,4 +1,6 @@
 {
+  "buildCommand": "mkdir -p dist && cp *.html *.txt dist/",
+  "outputDirectory": "dist",
   "functions": {
     "api/**/*.js": {
       "memory": 1024,
@@ -8,8 +10,7 @@
   "crons": [
     {
       "path": "/api/send-scheduled-notifications",
-      "schedule": "0 * * * *"
+      "schedule": "*/15 * * * *"
     }
   ]
-} 
- 
+}
