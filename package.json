@@ -2,7 +2,7 @@
   "name": "unbuilt-works-site",
   "version": "1.0.0",
   "type": "module",
- 
+ "scripts": {}
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0"
   }
