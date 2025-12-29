@@ -5,6 +5,29 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
+// Disable Vercel's body parser so we can read the raw body
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+// Helper to read raw body from request
+async function getRawBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk) => {
+      data += chunk;
+    });
+    req.on('end', () => {
+      resolve(data);
+    });
+    req.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
+
 async function sendPushNotification(token, project) {
   const message = {
     to: token,
@@ -27,42 +50,32 @@ async function sendPushNotification(token, project) {
   return response.json();
 }
 
-// Helper to parse body - handles string, object, or buffer
-function parseBody(req) {
-  if (!req.body) return null;
-  
-  // Already an object
-  if (typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
-    return req.body;
-  }
-  
-  // String or Buffer - parse as JSON
-  try {
-    const str = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : req.body;
-    return JSON.parse(str);
-  } catch (e) {
-    console.error('Failed to parse body:', e);
-    return null;
-  }
-}
-
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const body = parseBody(req);
+    // Read the raw body
+    const rawBody = await getRawBody(req);
     
     console.log('Webhook received:', {
       topic: req.headers['x-contentful-topic'],
-      hasBody: !!body,
-      bodyKeys: body ? Object.keys(body) : []
+      rawBodyLength: rawBody?.length || 0,
+      rawBodyPreview: rawBody?.substring(0, 200)
     });
 
-    if (!body) {
-      console.error('No body received or failed to parse');
+    if (!rawBody) {
+      console.error('No body received');
       return res.status(400).json({ error: 'No body received' });
+    }
+
+    let body;
+    try {
+      body = JSON.parse(rawBody);
+    } catch (e) {
+      console.error('Failed to parse JSON:', e);
+      return res.status(400).json({ error: 'Invalid JSON' });
     }
 
     const { sys, fields } = body;
