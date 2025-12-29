@@ -5,12 +5,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-export const config = {
-  api: {
-    bodyParser: true,
-  },
-};
-
 async function sendPushNotification(token, project) {
   const message = {
     to: token,
@@ -33,18 +27,45 @@ async function sendPushNotification(token, project) {
   return response.json();
 }
 
+// Helper to parse body - handles string, object, or buffer
+function parseBody(req) {
+  if (!req.body) return null;
+  
+  // Already an object
+  if (typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
+    return req.body;
+  }
+  
+  // String or Buffer - parse as JSON
+  try {
+    const str = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : req.body;
+    return JSON.parse(str);
+  } catch (e) {
+    console.error('Failed to parse body:', e);
+    return null;
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
+    const body = parseBody(req);
+    
     console.log('Webhook received:', {
       topic: req.headers['x-contentful-topic'],
-      body: req.body
+      hasBody: !!body,
+      bodyKeys: body ? Object.keys(body) : []
     });
 
-    const { sys, fields } = req.body;
+    if (!body) {
+      console.error('No body received or failed to parse');
+      return res.status(400).json({ error: 'No body received' });
+    }
+
+    const { sys, fields } = body;
     const topic = req.headers['x-contentful-topic'];
     
     // Only process published projects
@@ -53,22 +74,21 @@ export default async function handler(req, res) {
     }
 
     // Check if sendNotification field is set to true
-    // The field should be a boolean in Contentful
-    const shouldSendNotification = fields.sendNotification?.['en-US'] === true;
+    const shouldSendNotification = fields?.sendNotification?.['en-US'] === true;
 
     if (!shouldSendNotification) {
       console.log('Notification skipped - sendNotification is not enabled for this project');
       return res.status(200).json({ 
         message: 'Project published but notifications not sent (sendNotification is false or not set)',
-        projectId: sys.id,
-        projectTitle: fields.title?.['en-US']
+        projectId: sys?.id,
+        projectTitle: fields?.title?.['en-US']
       });
     }
 
     const project = {
       id: sys.id,
-      title: fields.title?.['en-US'] || 'New Project',
-      architect: fields.architect?.['en-US'] || 'Unknown',
+      title: fields?.title?.['en-US'] || 'New Project',
+      architect: fields?.architect?.['en-US'] || 'Unknown',
     };
 
     console.log(`Sending notifications for project: ${project.title}`);
