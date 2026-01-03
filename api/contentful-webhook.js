@@ -5,49 +5,61 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// Disable Vercel's body parser so we can read the raw body
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
-
-// Helper to read raw body from request
-async function getRawBody(req) {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', (chunk) => {
-      data += chunk;
-    });
-    req.on('end', () => {
-      resolve(data);
-    });
-    req.on('error', (err) => {
-      reject(err);
-    });
-  });
-}
-
-async function sendPushNotification(token, project) {
+async function sendPushNotification(token, caseFile) {
   const message = {
     to: token,
     sound: 'default',
-    title: 'New Project Published',
-    body: `${project.title} by ${project.architect}`,
+    title: '🗃 NEW CASE FILE DECLASSIFIED',
+    body: `${caseFile.title}`,
     data: { 
-      projectId: project.id,
-      screen: 'daily',
+      caseId: caseFile.id,
+      screen: 'case',
     },
     badge: 1,
+    categoryId: 'new_case',
   };
 
-  const response = await fetch('https://exp.host/--/api/v2/push/send', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(message),
-  });
+  try {
+    const response = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify(message),
+    });
 
-  return response.json();
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    console.error('Error sending push notification:', error);
+    return null;
+  }
+}
+
+// Helper to parse body - handles both pre-parsed and raw body
+async function parseBody(req) {
+  // If body is already parsed
+  if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+    return req.body;
+  }
+  
+  // Try to read raw body
+  try {
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(chunk);
+    }
+    const rawBody = Buffer.concat(chunks).toString('utf8');
+    
+    if (rawBody) {
+      return JSON.parse(rawBody);
+    }
+  } catch (e) {
+    console.log('Could not parse raw body:', e.message);
+  }
+  
+  return null;
 }
 
 export default async function handler(req, res) {
@@ -56,60 +68,73 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Read the raw body
-    const rawBody = await getRawBody(req);
+    // Parse body with fallback
+    const body = await parseBody(req);
     
-    console.log('Webhook received:', {
+    console.log('[Webhook] Received:', {
       topic: req.headers['x-contentful-topic'],
-      rawBodyLength: rawBody?.length || 0,
-      rawBodyPreview: rawBody?.substring(0, 200)
+      hasBody: !!body,
+      contentType: body?.sys?.contentType?.sys?.id,
     });
 
-    if (!rawBody) {
+    if (!body) {
       console.error('No body received');
       return res.status(400).json({ error: 'No body received' });
-    }
-
-    let body;
-    try {
-      body = JSON.parse(rawBody);
-    } catch (e) {
-      console.error('Failed to parse JSON:', e);
-      return res.status(400).json({ error: 'Invalid JSON' });
     }
 
     const { sys, fields } = body;
     const topic = req.headers['x-contentful-topic'];
     
-    // Only process published projects
-    if (topic !== 'ContentManagement.Entry.publish' || sys?.contentType?.sys?.id !== 'project') {
-      return res.status(200).json({ message: 'Ignored - not a project publish event' });
+    // Only process published case files
+    if (topic !== 'ContentManagement.Entry.publish') {
+      return res.status(200).json({ message: 'Not a publish event, ignored' });
+    }
+    
+    if (!sys) {
+      console.error('No sys object in body');
+      return res.status(400).json({ error: 'Invalid payload - no sys object' });
+    }
+    
+    // Check for caseFile content type (redactedFileEntry in Contentful)
+    const contentType = sys?.contentType?.sys?.id;
+    if (contentType !== 'redactedFileEntry') {
+      return res.status(200).json({ message: `Content type "${contentType}" ignored, only redactedFileEntry triggers notifications` });
     }
 
-    // Check if sendNotification field is set to true
-    const shouldSendNotification = fields?.sendNotification?.['en-US'] === true;
-
-    if (!shouldSendNotification) {
-      console.log('Notification skipped - sendNotification is not enabled for this project');
+    // Check if sendNotification is enabled (default: false)
+    const sendNotification = fields?.sendNotification?.['en-US'] === true;
+    if (!sendNotification) {
+      console.log('[Webhook] sendNotification is false, skipping notifications');
       return res.status(200).json({ 
-        message: 'Project published but notifications not sent (sendNotification is false or not set)',
-        projectId: sys?.id,
-        projectTitle: fields?.title?.['en-US']
+        success: true, 
+        skipped: true,
+        reason: 'sendNotification checkbox is not checked' 
       });
     }
 
-    const project = {
+    // Extract case file data - use fileCategory for notification matching
+    // fileCategory can be a single value or an array in Contentful
+    const rawFileCategory = fields?.fileCategory?.['en-US'];
+    const fileCategory = Array.isArray(rawFileCategory) 
+      ? rawFileCategory 
+      : (rawFileCategory ? [rawFileCategory] : []);
+    
+    const caseFile = {
       id: sys.id,
-      title: fields?.title?.['en-US'] || 'New Project',
-      architect: fields?.architect?.['en-US'] || 'Unknown',
+      title: fields?.title?.['en-US'] || 'New Case File',
+      caseIdNumber: fields?.caseIdNumber?.['en-US'] || fields?.caseIDNumber?.['en-US'] || 0,
+      fileCategory: fileCategory,
+      slug: fields?.slug?.['en-US'] || sys.id,
     };
 
-    console.log(`Sending notifications for project: ${project.title}`);
+    const formattedCaseId = `PU-${String(caseFile.caseIdNumber).padStart(4, '0')}`;
+    console.log(`[Webhook] New case file: ${formattedCaseId} - ${caseFile.title}`);
+    console.log(`[Webhook] File categories: ${JSON.stringify(caseFile.fileCategory)}`);
 
     // Get all users with notifications enabled
     const { data: users, error: userError } = await supabase
       .from('user_push_tokens')
-      .select('push_token, user_id')
+      .select('user_id, push_token, notification_case_types')
       .eq('notifications_enabled', true);
 
     if (userError) {
@@ -117,48 +142,84 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Database error fetching users' });
     }
 
+    if (!users || users.length === 0) {
+      console.log('No users with notifications enabled');
+      return res.status(200).json({ 
+        success: true, 
+        message: 'No users to notify',
+        caseFile: formattedCaseId,
+      });
+    }
+
+    console.log(`[Webhook] Processing ${users.length} users...`);
+
     let sent = 0;
+    let skipped = 0;
     let errors = 0;
 
-    for (const user of users || []) {
+    for (const user of users) {
       try {
-        const result = await sendPushNotification(user.push_token, project);
+        // Filter by case type preferences (if user has set them)
+        // If notification_case_types is null/empty, send to everyone
+        // If it's set, only send if case matches user's preferred types
+        const userPreferredTypes = user.notification_case_types;
         
-        if (result?.data?.status === 'ok') {
-          sent++;
+        if (userPreferredTypes && Array.isArray(userPreferredTypes) && userPreferredTypes.length > 0) {
+          // User has type preferences - check if this case's fileCategory matches
+          const hasMatchingType = caseFile.fileCategory.some(category => 
+            userPreferredTypes.includes(category)
+          );
           
-          // Record notification in history
-          await supabase
-            .from('notification_history')
-            .insert({
-              user_id: user.user_id,
-              project_id: project.id,
-              notified_at: new Date().toISOString(),
-            });
+          console.log(`[Webhook] User ${user.user_id}: prefers [${userPreferredTypes.join(', ')}], case has [${caseFile.fileCategory.join(', ')}], match: ${hasMatchingType}`);
+          
+          if (!hasMatchingType) {
+            console.log(`[Webhook] Skipping user ${user.user_id} - no matching categories`);
+            skipped++;
+            continue;
+          }
+        }
+
+        const result = await sendPushNotification(user.push_token, caseFile);
+        
+        if (result && result.data) {
+          sent++;
+          console.log(`[Webhook] Sent to user ${user.user_id}`);
         } else {
           errors++;
-          console.error(`Failed to send to user ${user.user_id}:`, result);
+          console.error(`[Webhook] Failed for user ${user.user_id}:`, result);
         }
-        
+
         // Small delay to avoid rate limiting
         await new Promise(resolve => setTimeout(resolve, 50));
+
       } catch (error) {
         errors++;
-        console.error(`Error sending to user ${user.user_id}:`, error);
+        console.error(`Error processing user ${user.user_id}:`, error);
       }
     }
 
-    console.log(`Notifications sent: ${sent}, errors: ${errors}`);
+    console.log(`[Webhook] Summary: ${sent} sent, ${skipped} skipped, ${errors} errors`);
 
     return res.status(200).json({ 
       success: true, 
+      caseFile: formattedCaseId,
+      title: caseFile.title,
+      fileCategory: caseFile.fileCategory,
+      totalUsers: users.length,
       sent,
+      skipped,
       errors,
-      projectId: project.id,
-      projectTitle: project.title
     });
+
   } catch (error) {
     console.error('Webhook error:', error);
     return res.status(500).json({ error: error.message });
   }
 }
+
+// Disable Vercel's default body parser so we can handle it ourselves
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
